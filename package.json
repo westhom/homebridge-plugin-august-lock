@@ -1,6 +1,6 @@
 {
-  "name": "homebridge-plugin-name",
-  "displayName": "Plugin Name",
+  "name": "homebridge-plugin-august-lock",
+  "displayName": "August Lock",
   "type": "module",
   "version": "1.0.0",
   "private": true,
@@ -30,6 +30,7 @@
     "watch": "npm run build && npm link && nodemon"
   },
   "dependencies": {
+    "august-api": "^1.5.1",
     "homebridge-lib": "^7.1.8"
   },
   "devDependencies": {

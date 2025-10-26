@@ -1,17 +1,27 @@
 {
-  "pluginAlias": "ExampleHomebridgePlugin",
+  "pluginAlias": "AugustLock",
   "pluginType": "platform",
   "singular": true,
   "strictValidation": false,
   "schema": {
     "type": "object",
-    "required": ["name"],
+    "required": ["accountId", "accountPassword"],
     "additionalProperties": false,
     "properties": {
-      "name": {
-        "title": "Name",
+      "accountId": {
+        "title": "August Account ID (phone or email)",
         "type": "string",
-        "default": "Example Dynamic Platform"
+        "default": ""
+      },
+      "accountPassword": {
+        "title": "August Account Password",
+        "type": "string",
+        "default": ""
+      },
+      "authCode": {
+        "title": "August 2FA code",
+        "type": "string",
+        "default": ""
       }
     }
   }

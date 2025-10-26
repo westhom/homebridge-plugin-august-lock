@@ -2,9 +2,16 @@ import type { API, Characteristic, DynamicPlatformPlugin, Logging, PlatformAcces
 
 import { ExamplePlatformAccessory } from './platformAccessory.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
+import path from 'path';
+import { promises as fs } from 'fs';
 
-// This is only required when using Custom Services and Characteristics not support by HomeKit
-import { EveHomeKitTypes } from 'homebridge-lib/EveHomeKitTypes';
+// @ts-expect-error August API has no types
+import August from 'august-api';
+
+type AugustState = {
+  installationId?: string;
+  authorized: boolean;
+}
 
 /**
  * HomebridgePlatform
@@ -19,11 +26,9 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
   public readonly accessories: Map<string, PlatformAccessory> = new Map();
   public readonly discoveredCacheUUIDs: string[] = [];
 
-  // This is only required when using Custom Services and Characteristics not support by HomeKit
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  public readonly CustomServices: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  public readonly CustomCharacteristics: any;
+  private state: AugustState = { authorized: false };
+
+  private augustClient: August | null = null;
 
   constructor(
     public readonly log: Logging,
@@ -33,21 +38,73 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
     this.Service = api.hap.Service;
     this.Characteristic = api.hap.Characteristic;
 
-    // This is only required when using Custom Services and Characteristics not support by HomeKit
-    this.CustomServices = new EveHomeKitTypes(this.api).Services;
-    this.CustomCharacteristics = new EveHomeKitTypes(this.api).Characteristics;
+    this.api.on('didFinishLaunching', async () => {
+      await this.loadOrInitState();
 
-    this.log.debug('Finished initializing platform:', this.config.name);
+      if( !this.state.installationId ) {
+        this.state.installationId = this.api.hap.uuid.generate(this.config.accountId as string);
+        this.log.info('Generated new installationId:', this.state.installationId);
+      }
 
-    // When this event is fired it means Homebridge has restored all cached accessories from disk.
-    // Dynamic Platform plugins should only register new accessories after this event was fired,
-    // in order to ensure they weren't added to homebridge already. This event can also be used
-    // to start discovery of new accessories.
-    this.api.on('didFinishLaunching', () => {
-      log.debug('Executed didFinishLaunching callback');
-      // run the method to discover / register your devices as accessories
-      this.discoverDevices();
+      this.augustClient = new August({
+        installId: this.state.installationId,
+        augustId: this.config.accountId as string,
+        password: this.config.accountPassword as string,
+      });
+
+      if( !this.state.authorized ) {
+        if( this.config.authCode ) {
+          const success = await this.augustClient.validate(this.config.authCode);
+
+          if( success ) {
+            this.log.info('Successfully authorized with August API');
+            this.state.authorized = true;
+            await this.saveState();
+          } else {
+            this.log.error('Failed to authorize with August API - please check your 2FA code and try again');
+          }
+        } else {
+          this.log.info('Initiating auth flow with August API');
+          const success = await this.augustClient.authorize();
+          if( success ) {
+            this.log.info('Authorization code sent to your email. Please add the code to the config and restart Homebridge to complete authorization.');
+          } else {
+            this.log.error('Failed to initiate authorization with August API - please check your account ID and password');
+          }
+        }
+
+        return;
+      }
+
+      if( this.state.authorized ) {
+        this.discoverDevices();
+      }
     });
+
+    this.api.on('shutdown', async () => {
+      this.saveState();
+    });
+  }
+
+  async saveState(){
+    const configPath = path.join(this.api.user.storagePath(), 'august-lock', 'state.json');
+    this.log.debug('Saving state to:', configPath);
+    await fs.writeFile(configPath, JSON.stringify(this.state), 'utf-8');
+  }
+
+  async loadOrInitState(){
+    const configPath = path.join(this.api.user.storagePath(), 'august-lock', 'state.json');
+
+    try {
+      await fs.access(configPath);
+    } catch (e) {
+      this.log.debug('No existing state, initializing new state at:', configPath);
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify({}), 'utf-8');
+    }
+
+    this.log.debug('Loading state from:', configPath);
+    this.state = JSON.parse(await fs.readFile(configPath, 'utf-8'));
   }
 
   /**
