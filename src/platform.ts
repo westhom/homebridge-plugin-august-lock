@@ -2,6 +2,7 @@ import type { API, Characteristic, DynamicPlatformPlugin, Logging, PlatformAcces
 
 import path from 'path';
 import { promises as fs } from 'fs';
+import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 
 // @ts-expect-error August API has no types
 import August from 'august-api';
@@ -125,6 +126,14 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
   async discoverDevices() {
     const locks = await this.augustClient.locks();
     console.log(JSON.stringify(locks, null, 2)); 
+
+    for (const [uuid, accessory] of this.accessories) {
+      if (!this.discoveredCacheUUIDs.includes(uuid)) {
+        this.log.info('Removing old accessory from cache:', accessory.displayName);
+        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      }
+    }
+
     /*
     // EXAMPLE ONLY
     // A real plugin you would discover accessories from the local network, cloud services
