@@ -1,7 +1,5 @@
 import type { API, Characteristic, DynamicPlatformPlugin, Logging, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 
-import { ExamplePlatformAccessory } from './platformAccessory.js';
-import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import path from 'path';
 import { promises as fs } from 'fs';
 
@@ -30,6 +28,8 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
 
   private augustClient: August | null = null;
 
+  private configPath = '';
+
   constructor(
     public readonly log: Logging,
     public readonly config: PlatformConfig,
@@ -37,6 +37,8 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
   ) {
     this.Service = api.hap.Service;
     this.Characteristic = api.hap.Characteristic;
+
+    this.configPath = path.join(this.api.user.storagePath(), 'august-lock', 'state.json');
 
     this.api.on('didFinishLaunching', async () => {
       await this.loadOrInitState();
@@ -87,24 +89,21 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
   }
 
   async saveState(){
-    const configPath = path.join(this.api.user.storagePath(), 'august-lock', 'state.json');
-    this.log.debug('Saving state to:', configPath);
-    await fs.writeFile(configPath, JSON.stringify(this.state), 'utf-8');
+    this.log.debug('Saving state to:', this.configPath);
+    await fs.writeFile(this.configPath, JSON.stringify(this.state, null, 2), 'utf-8');
   }
 
   async loadOrInitState(){
-    const configPath = path.join(this.api.user.storagePath(), 'august-lock', 'state.json');
-
     try {
-      await fs.access(configPath);
+      await fs.access(this.configPath);
     } catch (e) {
-      this.log.debug('No existing state, initializing new state at:', configPath);
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify({}), 'utf-8');
+      this.log.debug('No existing state, initializing new state at:', this.configPath);
+      await fs.mkdir(path.dirname(this.configPath), { recursive: true });
+      await fs.writeFile(this.configPath, JSON.stringify({}), 'utf-8');
     }
 
-    this.log.debug('Loading state from:', configPath);
-    this.state = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+    this.log.debug('Loading state from:', this.configPath);
+    this.state = JSON.parse(await fs.readFile(this.configPath, 'utf-8'));
   }
 
   /**
@@ -123,7 +122,10 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
    * Accessories must only be registered once, previously created accessories
    * must not be registered again to prevent "duplicate UUID" errors.
    */
-  discoverDevices() {
+  async discoverDevices() {
+    const locks = await this.augustClient.locks();
+    console.log(JSON.stringify(locks, null, 2)); 
+    /*
     // EXAMPLE ONLY
     // A real plugin you would discover accessories from the local network, cloud services
     // or a user-defined array in the platform config.
@@ -203,5 +205,6 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
         this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       }
     }
+    */
   }
 }
