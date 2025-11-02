@@ -6,6 +6,8 @@ import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 
 // @ts-expect-error August API has no types
 import August from 'august-api';
+import { AugustAPILockDetailed, AugustLockContext } from './types.js';
+import { AugustLockAccessory } from './lockAccessory.js';
 
 type AugustState = {
   installationId?: string;
@@ -17,12 +19,12 @@ type AugustState = {
  * This class is the main constructor for your plugin, this is where you should
  * parse the user config and discover/register accessories with Homebridge.
  */
-export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
+export class AugustLockPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service;
   public readonly Characteristic: typeof Characteristic;
 
   // this is used to track restored cached accessories
-  public readonly accessories: Map<string, PlatformAccessory> = new Map();
+  public readonly accessories: Map<string, PlatformAccessory<AugustLockContext>> = new Map();
   public readonly discoveredCacheUUIDs: string[] = [];
 
   private state: AugustState = { authorized: false };
@@ -115,7 +117,7 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
     this.log.info('Loading accessory from cache:', accessory.displayName);
 
     // add the restored accessory to the accessories cache, so we can track if it has already been registered
-    this.accessories.set(accessory.UUID, accessory);
+    this.accessories.set(accessory.UUID, accessory as PlatformAccessory<AugustLockContext>);
   }
 
   /**
@@ -124,8 +126,48 @@ export class ExampleHomebridgePlatform implements DynamicPlatformPlugin {
    * must not be registered again to prevent "duplicate UUID" errors.
    */
   async discoverDevices() {
-    const locks = await this.augustClient.locks();
-    console.log(JSON.stringify(locks, null, 2)); 
+    const locksDetails = await this.augustClient.details() as AugustAPILockDetailed[];
+    // console.log(JSON.stringify(locksDetails, null, 2));
+    const locks = locksDetails.map((lock) => {
+      const lockState = lock.LockStatus.status === 'locked' ? 1 : 0;
+      return {
+        id: lock.LockID,
+        name: lock.LockName,
+        LockCurrentState: lockState,
+        LockTargetState: lockState,
+        BatteryLevel: Math.round(lock.batteryInfo.level * 100),
+        serial: lock.SerialNumber,
+        model: lock.skuNumber,
+      } satisfies AugustLockContext;
+    });
+
+    this.log.debug(`Discovered locks:\n${JSON.stringify(locks, null, 2)}`);
+
+    for (const lock of locks) {
+      const uuid = this.api.hap.uuid.generate(lock.id);
+
+      const existingAccessory = this.accessories.get(uuid);
+      
+      if (existingAccessory) {
+        this.log.info(`Restoring existing lock from cache: ${lock.name} (${lock.id})`);
+        // update context
+        existingAccessory.context = lock;
+        this.api.updatePlatformAccessories([existingAccessory]);
+
+        new AugustLockAccessory(this, existingAccessory, this.augustClient);
+      } else {
+        this.log.info(`Adding new lock: ${lock.name} (${lock.id})`);
+
+        const accessory = new this.api.platformAccessory<AugustLockContext>(lock.name, uuid);
+        accessory.context = lock;
+
+        new AugustLockAccessory(this, accessory, this.augustClient);
+
+        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      }
+
+      this.discoveredCacheUUIDs.push(uuid);
+    }
 
     for (const [uuid, accessory] of this.accessories) {
       if (!this.discoveredCacheUUIDs.includes(uuid)) {
