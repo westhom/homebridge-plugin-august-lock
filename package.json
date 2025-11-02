@@ -1,6 +1,6 @@
 {
   "name": "homebridge-plugin-august-lock",
-  "displayName": "August Lock",
+  "displayName": "August Locks",
   "type": "module",
   "version": "1.0.0",
   "private": true,
