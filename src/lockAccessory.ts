@@ -1,6 +1,6 @@
 import { CharacteristicValue, PlatformAccessory, Service } from 'homebridge';
 import { AugustLockPlatform } from './platform.js';
-import type { AugustLockContext, AugustLockStatus } from './types.js';
+import type { AugustAPILockDetailed, AugustLockContext, AugustLockStatus } from './types.js';
 
 // @ts-expect-error August API has no types
 import August from 'august-api';
@@ -10,11 +10,17 @@ export class AugustLockAccessory {
   private batteryService: Service;
   private unsubscribeFromAPI: () => void;
 
+  private readonly securedState: number;
+  private readonly unsecuredState: number;
+
   constructor(
     private readonly platform: AugustLockPlatform,
     private readonly accessory: PlatformAccessory<AugustLockContext>,
     private augustClient: August,
   ){
+    this.securedState = this.platform.Characteristic.LockCurrentState.SECURED;
+    this.unsecuredState = this.platform.Characteristic.LockCurrentState.UNSECURED;
+
     // set accessory information
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'August')
@@ -66,15 +72,14 @@ export class AugustLockAccessory {
 
     // subscribe to updates
     this.unsubscribeFromAPI = this.augustClient.subscribe(this.accessory.context.id, (lockStatus: AugustLockStatus) => {
-      this.platform.log.debug(`Received subscription update for lock ${this.accessory.context.name}: locked = ${lockStatus.state.locked}`);
-      
-      const subscriptionState = lockStatus.state.locked ? 1 : 0;
-      if( this.accessory.context.LockCurrentState === subscriptionState ) {
+      const subscriptionState = this.getStateFromStatus(lockStatus);
+      if( subscriptionState === null ) {
+        this.platform.log.warn(`Received subscription update for lock ${this.accessory.context.name} without a usable state`);
         return;
       }
 
-      this.accessory.context.LockCurrentState = subscriptionState;
-      this.lockService.updateCharacteristic(this.platform.Characteristic.LockCurrentState, subscriptionState);
+      this.platform.log.debug(`Received subscription update for lock ${this.accessory.context.name}: ${subscriptionState === this.securedState ? 'locked' : 'unlocked'}`);
+      this.applyLockState(subscriptionState);
     });
   }
 
@@ -93,27 +98,75 @@ export class AugustLockAccessory {
     this.lockService.updateCharacteristic(this.platform.Characteristic.LockTargetState, this.accessory.context.LockTargetState);
   }
 
+  private getStateFromStatus(lockStatus: AugustLockStatus): number | null {
+    if( typeof lockStatus?.state?.locked === 'boolean' ) {
+      return lockStatus.state.locked ? this.securedState : this.unsecuredState;
+    }
+
+    if( lockStatus?.status === 'kAugLockState_Locked' ) {
+      return this.securedState;
+    }
+
+    if( lockStatus?.status === 'kAugLockState_Unlocked' ) {
+      return this.unsecuredState;
+    }
+
+    return null;
+  }
+
+  private applyLockState(nextState: number) {
+    this.accessory.context.LockCurrentState = nextState;
+    this.accessory.context.LockTargetState = nextState;
+
+    this.lockService.updateCharacteristic(this.platform.Characteristic.LockCurrentState, nextState);
+    this.lockService.updateCharacteristic(this.platform.Characteristic.LockTargetState, nextState);
+  }
+
+  private async getCurrentLockStateFromDetails() {
+    const locks = await this.augustClient.details() as AugustAPILockDetailed[];
+    const lock = locks.find((details) => details.LockID === this.accessory.context.id);
+    if( !lock ) {
+      return null;
+    }
+
+    return lock.LockStatus.status === 'locked'
+      ? this.securedState
+      : this.unsecuredState;
+  }
+
   /**
    * Handle requests to set the "Lock Target State" characteristic
    */
   async handleLockTargetStateSet(value: CharacteristicValue) {
-    this.accessory.context.LockTargetState = value as number;
+    const desiredState = value as number;
+    this.accessory.context.LockTargetState = desiredState;
+    this.lockService.updateCharacteristic(this.platform.Characteristic.LockTargetState, desiredState);
 
     if( this.accessory.context.LockTargetState === this.accessory.context.LockCurrentState ) {
       // No change needed
       return;
     }
 
-    let lockStatus: AugustLockStatus;
+    try {
+      let lockStatus: AugustLockStatus;
 
-    if( value === this.platform.Characteristic.LockTargetState.SECURED ) {
-      lockStatus = await this.augustClient.lock(this.accessory.context.id) as AugustLockStatus;
-    } else {
-      lockStatus = await this.augustClient.unlock(this.accessory.context.id) as AugustLockStatus;
+      if( desiredState === this.platform.Characteristic.LockTargetState.SECURED ) {
+        lockStatus = await this.augustClient.lock(this.accessory.context.id) as AugustLockStatus;
+      } else {
+        lockStatus = await this.augustClient.unlock(this.accessory.context.id) as AugustLockStatus;
+      }
+
+      const resolvedState = this.getStateFromStatus(lockStatus) ?? await this.getCurrentLockStateFromDetails();
+
+      if( resolvedState === null ) {
+        this.platform.log.warn(`Unable to resolve final lock state for ${this.accessory.context.name} after command`);
+        return;
+      }
+
+      this.applyLockState(resolvedState);
+    } catch (error) {
+      this.platform.log.error(`Failed to set lock state for ${this.accessory.context.name}`, error);
+      throw error;
     }
-
-    // Update current state based on the result
-    this.accessory.context.LockCurrentState = lockStatus.state.locked ? 1 : 0;
-    this.lockService.updateCharacteristic(this.platform.Characteristic.LockCurrentState, this.accessory.context.LockCurrentState);
   }
 }
