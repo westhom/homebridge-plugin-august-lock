@@ -78,7 +78,8 @@ export class AugustLockAccessory {
         return;
       }
 
-      this.platform.log.debug(`Received subscription update for lock ${this.accessory.context.name}: ${subscriptionState === this.securedState ? 'locked' : 'unlocked'}`);
+      const subscriptionLabel = subscriptionState === this.securedState ? 'locked' : 'unlocked';
+      this.platform.log.debug(`Received subscription update for lock ${this.accessory.context.name}: ${subscriptionLabel}`);
       this.applyLockState(subscriptionState);
     });
   }
